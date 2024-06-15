@@ -8,6 +8,9 @@ Open Auto Trend Support Resistance displays the trend line, support and resistan
 
 For usage, you can download the zip containing the word import in the release page. You can import this zip file similar to importing a normal NinjaTrader Add-On. https://github.com/WaleeTheRobot/open-auto-trend-support-resistance/releases
 
+You can also download it at NinjaTrader Ecosystem. It may take a few days for them to update to the latest version found here on GitHub. 
+https://ninjatraderecosystem.com/user-app-share-download/auto-trend-support-resistance
+
 # Properties
 
 - Right Offset - The offset for the lines from the right.
