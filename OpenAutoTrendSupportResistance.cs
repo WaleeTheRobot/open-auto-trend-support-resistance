@@ -1,7 +1,3 @@
-#region Using declarations
-#endregion
-
-//This namespace holds Indicators in this folder and is required. Do not change it. 
 using NinjaTrader.Gui;
 using NinjaTrader.Gui.Chart;
 using System.Collections.Generic;
@@ -20,6 +16,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         public bool IsHigh { get; set; }
         public bool DisplayLevel { get; set; }
         public bool IsLevelTested { get; set; }
+        public bool IsLevelBroken { get; set; }
 
         public PivotPoint(int barNumber, double price, double close, bool isHigh)
         {
@@ -29,22 +26,38 @@ namespace NinjaTrader.NinjaScript.Indicators
             IsHigh = isHigh;
             DisplayLevel = true;
             IsLevelTested = false;
+            IsLevelBroken = false;
         }
     }
 
     public class OpenAutoTrendSupportResistance : Indicator
     {
+        public const string GROUP_NAME_GENERAL = "General";
         public const string GROUP_NAME = "Open Auto Trend Support Resistance";
 
         private Brush _trendLineColor;
         private Brush _levelLineColor;
         private Brush _testLineColor;
+        private Brush _brokenLineColor;
 
         private List<PivotPoint> _pivots = new List<PivotPoint>();
         private PivotPoint _currentPivot = null;
         private bool _isLookingForHigh = true;
         private bool _hasFirstPivot = false;
         private double _requiredTicksForBroken = 0;
+
+        #region General Properties
+
+        [NinjaScriptProperty]
+        [Display(Name = "Version", Description = "Open Auto Trend Support Resistance version.", Order = 0, GroupName = GROUP_NAME_GENERAL)]
+        [ReadOnly(true)]
+        public string Version
+        {
+            get { return "1.1.0"; }
+            set { }
+        }
+
+        #endregion
 
         [NinjaScriptProperty]
         [Display(Name = "Right Offset", Description = "The offset for the lines from the right.", Order = 0, GroupName = GROUP_NAME)]
@@ -111,12 +124,36 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         [NinjaScriptProperty]
-        [Display(Name = "Trend Line Opacity", Description = "The opacity for the trend line. (0 to 255)", Order = 7, GroupName = GROUP_NAME)]
+        [XmlIgnore]
+        [Display(Name = "Broken Level Line Color", Description = "The broken level line color.", Order = 7, GroupName = GROUP_NAME)]
+        public Brush BrokenLevelLineColor
+        {
+            get { return _brokenLineColor; }
+            set { _brokenLineColor = value; }
+        }
+
+        [Browsable(false)]
+        public string BrokenLevelLineColorSerialize
+        {
+            get { return Serialize.BrushToString(_brokenLineColor); }
+            set { _brokenLineColor = Serialize.StringToBrush(value); }
+        }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Trend Line Opacity", Description = "The opacity for the trend line. (0 to 255)", Order = 8, GroupName = GROUP_NAME)]
         public byte TrendLineOpacity { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Level Line Opacity", Description = "The opacity for the level line and test level line. (0 to 255)", Order = 8, GroupName = GROUP_NAME)]
+        [Display(Name = "Level Line Opacity", Description = "The opacity for the level line and test level line. (0 to 255)", Order = 9, GroupName = GROUP_NAME)]
         public byte LevelLineOpacity { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Lookback Period SR Levels", Description = "Untested, tested and broken pivot points will display back to this value. If zero, only untested and tested will display.", Order = 10, GroupName = GROUP_NAME)]
+        public int LookbackPeriodSRLevels { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Lookback Period Broken SR Levels", Description = "Broken pivot points will display back to this value. If zero, no broken levels will display.", Order = 11, GroupName = GROUP_NAME)]
+        public int LookbackPeriodBrokenSRLevels { get; set; }
 
         protected override void OnStateChange()
         {
@@ -145,7 +182,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 TrendLineColor = Brushes.DarkGoldenrod;
                 LevelLineColor = Brushes.DarkCyan;
-                TestLevelLineColor = Brushes.Crimson;
+                TestLevelLineColor = Brushes.Gold;
+                BrokenLevelLineColor = Brushes.Crimson;
+
+                LookbackPeriodSRLevels = 0;
+                LookbackPeriodBrokenSRLevels = 50;
             }
             else if (State == State.DataLoaded)
             {
@@ -209,11 +250,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Check for resistance
                 else if (pivot.IsHigh && previousHigh > pivot.Price + _requiredTicksForBroken)
                 {
+                    pivot.IsLevelBroken = true;
                     pivot.DisplayLevel = false;
                 }
                 // Check for support
                 else if (!pivot.IsHigh && previousLow < pivot.Price - _requiredTicksForBroken)
                 {
+                    pivot.IsLevelBroken = true;
                     pivot.DisplayLevel = false;
                 }
             }
@@ -231,7 +274,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     // High pivot found and switch to looking for a low pivot
                     _pivots.Add(new PivotPoint(_currentPivot.BarNumber, _currentPivot.Price, _currentPivot.Close, true));
-                    _currentPivot = new PivotPoint(previousBarNumber, previousLow, previousClose, true);
+                    _currentPivot = new PivotPoint(previousBarNumber, previousLow, previousClose, false);
                     _isLookingForHigh = false;
                 }
             }
@@ -248,7 +291,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 {
                     // Low pivot found and switch to looking for a high pivot
                     _pivots.Add(new PivotPoint(_currentPivot.BarNumber, _currentPivot.Price, _currentPivot.Close, false));
-                    _currentPivot = new PivotPoint(previousBarNumber, previousHigh, previousClose, false);
+                    _currentPivot = new PivotPoint(previousBarNumber, previousHigh, previousClose, true);
                     _isLookingForHigh = true;
                 }
             }
@@ -265,9 +308,11 @@ namespace NinjaTrader.NinjaScript.Indicators
             var trendLineColor = ConvertToDxColor(TrendLineColor, TrendLineOpacity);
             var levelLineColor = ConvertToDxColor(LevelLineColor, LevelLineOpacity);
             var testLineColor = ConvertToDxColor(TestLevelLineColor, LevelLineOpacity);
+            var brokenLineColor = ConvertToDxColor(BrokenLevelLineColor, LevelLineOpacity);
 
             using (var levelLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, levelLineColor))
-            using (var brokenLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, testLineColor))
+            using (var testLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, testLineColor))
+            using (var brokenLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, brokenLineColor))
             using (SharpDX.Direct2D1.SolidColorBrush dxBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, trendLineColor))
             {
                 if (DisplayTrendLine)
@@ -284,15 +329,59 @@ namespace NinjaTrader.NinjaScript.Indicators
                         );
                         RenderTarget.DrawLine(startPoint, endPoint, dxBrush, 2);
                     }
+
+                    // Draw line from last pivot to current pivot
+                    if (_currentPivot != null)
+                    {
+                        PivotPoint lastPivot = _pivots[_pivots.Count - 1];
+                        SharpDX.Vector2 startPoint = new SharpDX.Vector2(
+                            chartControl.GetXByBarIndex(ChartBars, lastPivot.BarNumber),
+                            chartScale.GetYByValue(lastPivot.Price)
+                        );
+                        SharpDX.Vector2 endPoint = new SharpDX.Vector2(
+                            chartControl.GetXByBarIndex(ChartBars, _currentPivot.BarNumber),
+                            chartScale.GetYByValue(_currentPivot.Price)
+                        );
+                        RenderTarget.DrawLine(startPoint, endPoint, dxBrush, 2);
+                    }
                 }
 
                 if (DisplayLevels)
                 {
-                    foreach (var pivot in _pivots)
+                    // Display all pivots up to LookbackPeriodSRLevels
+                    if (LookbackPeriodSRLevels != 0)
                     {
-                        if (pivot.DisplayLevel)
+                        foreach (var pivot in _pivots)
                         {
-                            DrawHorizontalLine(chartControl, chartScale, pivot, pivot.IsLevelTested ? brokenLineBrush : levelLineBrush);
+                            if (pivot.BarNumber >= CurrentBar - LookbackPeriodSRLevels && pivot.BarNumber <= CurrentBar)
+                            {
+                                if (pivot.IsLevelBroken)
+                                {
+                                    DrawHorizontalLine(chartControl, chartScale, pivot, brokenLineBrush);
+                                }
+                                else
+                                {
+                                    DrawHorizontalLine(chartControl, chartScale, pivot, pivot.IsLevelTested ? testLineBrush : levelLineBrush);
+                                }
+                            }
+                        }
+                    }
+                    // Display only untested and tested pivots
+                    else
+                    {
+                        foreach (var pivot in _pivots)
+                        {
+                            if (pivot.BarNumber >= CurrentBar - LookbackPeriodBrokenSRLevels && pivot.BarNumber <= CurrentBar || pivot.DisplayLevel)
+                            {
+                                if (pivot.IsLevelBroken)
+                                {
+                                    DrawHorizontalLine(chartControl, chartScale, pivot, brokenLineBrush);
+                                }
+                                else
+                                {
+                                    DrawHorizontalLine(chartControl, chartScale, pivot, pivot.IsLevelTested ? testLineBrush : levelLineBrush);
+                                }
+                            }
                         }
                     }
                 }
@@ -333,18 +422,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private OpenAutoTrendSupportResistance[] cacheOpenAutoTrendSupportResistance;
-		public OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
-			return OpenAutoTrendSupportResistance(Input, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, trendLineOpacity, levelLineOpacity);
+			return OpenAutoTrendSupportResistance(Input, version, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, brokenLevelLineColor, trendLineOpacity, levelLineOpacity, lookbackPeriodSRLevels, lookbackPeriodBrokenSRLevels);
 		}
 
-		public OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input, string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
 			if (cacheOpenAutoTrendSupportResistance != null)
 				for (int idx = 0; idx < cacheOpenAutoTrendSupportResistance.Length; idx++)
-					if (cacheOpenAutoTrendSupportResistance[idx] != null && cacheOpenAutoTrendSupportResistance[idx].RightOffset == rightOffset && cacheOpenAutoTrendSupportResistance[idx].RequiredTicksForBroken == requiredTicksForBroken && cacheOpenAutoTrendSupportResistance[idx].DisplayTrendLine == displayTrendLine && cacheOpenAutoTrendSupportResistance[idx].DisplayLevels == displayLevels && cacheOpenAutoTrendSupportResistance[idx].TrendLineColor == trendLineColor && cacheOpenAutoTrendSupportResistance[idx].LevelLineColor == levelLineColor && cacheOpenAutoTrendSupportResistance[idx].TestLevelLineColor == testLevelLineColor && cacheOpenAutoTrendSupportResistance[idx].TrendLineOpacity == trendLineOpacity && cacheOpenAutoTrendSupportResistance[idx].LevelLineOpacity == levelLineOpacity && cacheOpenAutoTrendSupportResistance[idx].EqualsInput(input))
+					if (cacheOpenAutoTrendSupportResistance[idx] != null && cacheOpenAutoTrendSupportResistance[idx].Version == version && cacheOpenAutoTrendSupportResistance[idx].RightOffset == rightOffset && cacheOpenAutoTrendSupportResistance[idx].RequiredTicksForBroken == requiredTicksForBroken && cacheOpenAutoTrendSupportResistance[idx].DisplayTrendLine == displayTrendLine && cacheOpenAutoTrendSupportResistance[idx].DisplayLevels == displayLevels && cacheOpenAutoTrendSupportResistance[idx].TrendLineColor == trendLineColor && cacheOpenAutoTrendSupportResistance[idx].LevelLineColor == levelLineColor && cacheOpenAutoTrendSupportResistance[idx].TestLevelLineColor == testLevelLineColor && cacheOpenAutoTrendSupportResistance[idx].BrokenLevelLineColor == brokenLevelLineColor && cacheOpenAutoTrendSupportResistance[idx].TrendLineOpacity == trendLineOpacity && cacheOpenAutoTrendSupportResistance[idx].LevelLineOpacity == levelLineOpacity && cacheOpenAutoTrendSupportResistance[idx].LookbackPeriodSRLevels == lookbackPeriodSRLevels && cacheOpenAutoTrendSupportResistance[idx].LookbackPeriodBrokenSRLevels == lookbackPeriodBrokenSRLevels && cacheOpenAutoTrendSupportResistance[idx].EqualsInput(input))
 						return cacheOpenAutoTrendSupportResistance[idx];
-			return CacheIndicator<OpenAutoTrendSupportResistance>(new OpenAutoTrendSupportResistance(){ RightOffset = rightOffset, RequiredTicksForBroken = requiredTicksForBroken, DisplayTrendLine = displayTrendLine, DisplayLevels = displayLevels, TrendLineColor = trendLineColor, LevelLineColor = levelLineColor, TestLevelLineColor = testLevelLineColor, TrendLineOpacity = trendLineOpacity, LevelLineOpacity = levelLineOpacity }, input, ref cacheOpenAutoTrendSupportResistance);
+			return CacheIndicator<OpenAutoTrendSupportResistance>(new OpenAutoTrendSupportResistance(){ Version = version, RightOffset = rightOffset, RequiredTicksForBroken = requiredTicksForBroken, DisplayTrendLine = displayTrendLine, DisplayLevels = displayLevels, TrendLineColor = trendLineColor, LevelLineColor = levelLineColor, TestLevelLineColor = testLevelLineColor, BrokenLevelLineColor = brokenLevelLineColor, TrendLineOpacity = trendLineOpacity, LevelLineOpacity = levelLineOpacity, LookbackPeriodSRLevels = lookbackPeriodSRLevels, LookbackPeriodBrokenSRLevels = lookbackPeriodBrokenSRLevels }, input, ref cacheOpenAutoTrendSupportResistance);
 		}
 	}
 }
@@ -353,14 +442,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
-			return indicator.OpenAutoTrendSupportResistance(Input, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, trendLineOpacity, levelLineOpacity);
+			return indicator.OpenAutoTrendSupportResistance(Input, version, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, brokenLevelLineColor, trendLineOpacity, levelLineOpacity, lookbackPeriodSRLevels, lookbackPeriodBrokenSRLevels);
 		}
 
-		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input , float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input , string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
-			return indicator.OpenAutoTrendSupportResistance(input, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, trendLineOpacity, levelLineOpacity);
+			return indicator.OpenAutoTrendSupportResistance(input, version, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, brokenLevelLineColor, trendLineOpacity, levelLineOpacity, lookbackPeriodSRLevels, lookbackPeriodBrokenSRLevels);
 		}
 	}
 }
@@ -369,14 +458,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
-			return indicator.OpenAutoTrendSupportResistance(Input, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, trendLineOpacity, levelLineOpacity);
+			return indicator.OpenAutoTrendSupportResistance(Input, version, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, brokenLevelLineColor, trendLineOpacity, levelLineOpacity, lookbackPeriodSRLevels, lookbackPeriodBrokenSRLevels);
 		}
 
-		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input , float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, byte trendLineOpacity, byte levelLineOpacity)
+		public Indicators.OpenAutoTrendSupportResistance OpenAutoTrendSupportResistance(ISeries<double> input , string version, float rightOffset, float requiredTicksForBroken, bool displayTrendLine, bool displayLevels, Brush trendLineColor, Brush levelLineColor, Brush testLevelLineColor, Brush brokenLevelLineColor, byte trendLineOpacity, byte levelLineOpacity, int lookbackPeriodSRLevels, int lookbackPeriodBrokenSRLevels)
 		{
-			return indicator.OpenAutoTrendSupportResistance(input, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, trendLineOpacity, levelLineOpacity);
+			return indicator.OpenAutoTrendSupportResistance(input, version, rightOffset, requiredTicksForBroken, displayTrendLine, displayLevels, trendLineColor, levelLineColor, testLevelLineColor, brokenLevelLineColor, trendLineOpacity, levelLineOpacity, lookbackPeriodSRLevels, lookbackPeriodBrokenSRLevels);
 		}
 	}
 }
